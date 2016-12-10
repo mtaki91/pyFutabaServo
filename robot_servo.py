@@ -1,4 +1,5 @@
-import serial, struct, time
+import serial, struct
+from time import sleep
 
 class futaba_servo:
   def __init__(self, serial_port, servo_id):
@@ -37,7 +38,7 @@ class futaba_servo:
     
     for tmp in command:
       self._serial.write(struct.pack('B', tmp))
-      time.sleep(0.001)
+      sleep(0.001)
    
   def move(self, Position, Time):
     data = [Position & 0x00FF, (Position & 0xFF00) >> 8 , Time & 0x00FF, (Time & 0xFF00) >> 8 ]
@@ -56,7 +57,7 @@ class futaba_servo:
     self._send_command(0x00, 0x24, 0x01, 0x01, data)
 
 
-  def get_servo_status(self):
+  def get_status(self):
     self._send_command(0x09, 0x00, 0x00, 0x01)
 
     readbuf = []
