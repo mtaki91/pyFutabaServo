@@ -25,7 +25,7 @@ class serial_converter(serial.Serial):
       return False
 
 
-class futaba_servo:
+class futaba_servo(object):
   def __init__(self, serial_conv, servo_id):
     self._serial_conv = serial_conv
     self._id = servo_id
@@ -112,7 +112,7 @@ class futaba_servo:
             "Voltage": _voltage}
 
 
-class robot_servos:
+class robot_servos(object):
   def __init__(self, servo_list, activate_sequence):
     self.servo_list = servo_list
     self._num_servo = len(servo_list)
@@ -136,13 +136,23 @@ class robot_servos:
   def deactivate(self):
     self.torque(0)
 
+
   def torque(self, mode):
-    for i in range(self._num_servo):
-      self.servo_list[i].torque(mode)
+    if isinstance(mode, int):
+      for servo in self.servo_list:
+        servo.torque(mode)
+
+    if isinstance(mode, list):
+      for i in range(self._num_servo):
+        self.servo_list[i].torque(mode[i])
+
 
   def move(self, position_list, move_time = 20):
     for i in range(self._num_servo):
-      self.servo_list[i].move(position_list[i], move_time)
+      if position_list[i] == None:
+        continue
+      else:
+        self.servo_list[i].move(position_list[i], move_time)
 
   def get_status(self):
     _angle = []
