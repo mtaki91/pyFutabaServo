@@ -13,25 +13,27 @@ class serial_converter(serial.Serial):
     self.connect()
     
   def connect(self):
-    try:
-      self.open()
-      self.isOpen = True
-      self.isBusy = False
+    self.isBusy = False
+    if self.isOpen == True:
       return True
 
-    except:
-      self.isOpen = False
-      self.isBusy = False
-      return False
+    else:  
+      try:
+        self.open()
+        return True
+    
+      except:
+        return False
 
 
 class futaba_servo(object):
-  def __init__(self, serial_conv, servo_id):
+  def __init__(self, serial_conv, servo_id, zero_position = 0):
     self._serial_conv = serial_conv
     self._id = servo_id
+    self._zero_pos = zero_position
 
   def is_open(self):
-    return self._serial_conv.isOpen
+    return self._serial_conv.isOpen()
 
   def _send_command(self, Flag, Address, Length, Count, Data=[]):
     command = [0xFA, 0xAF, self._id]
@@ -57,7 +59,19 @@ class futaba_servo(object):
       self._serial_conv.write(struct.pack('B', tmp))
       sleep(0.001)
    
+  def set_compliance_param(self, CW_Margin, CCW_Margin, CW_Slope, CCW_Slope, Punch):
+    data = [CW_Margin, CCW_Margin, CW_Slope, CCW_Slope, Punch & 0x00FF, (Punch & 0xFF00) >> 8]
+
+    while self._serial_conv.isBusy:
+      sleep(0.001)
+
+    self._serial_conv.isBusy = True
+    self._send_command(0x00, 0x18, 0x06, 0x01, data)
+    self._serial_conv.isBusy = False
+
+
   def move(self, Position, Time):
+    Position = Position + self._zero_pos
     data = [Position & 0x00FF, (Position & 0xFF00) >> 8 , Time & 0x00FF, (Time & 0xFF00) >> 8 ]
 
     while self._serial_conv.isBusy:
@@ -104,7 +118,7 @@ class futaba_servo(object):
     _temperature = struct.unpack('h', readbuf[15] + readbuf[16])[0]
     _voltage = struct.unpack('h', readbuf[17] + readbuf[18])[0]
 
-    return {"Angle": _angle,           
+    return {"Angle": _angle - self._zero_pos,           
             "Time": _time,
             "Speed": _speed,
             "Load": _load,
@@ -112,10 +126,19 @@ class futaba_servo(object):
             "Voltage": _voltage}
 
 
-class robot_servos(object):
-  def __init__(self, servo_list, activate_sequence):
+class servo_cluster(object):
+  def __init__(self, servo_list, activate_sequence = [], zero_position = []):
     self.servo_list = servo_list
     self._num_servo = len(servo_list)
+
+    if zero_position == []:
+      zero_position = [0 for i in range(self._num_servo)]
+
+    self.set_zero_position(zero_position)
+    
+    if activate_sequence == []:
+      activate_sequence = [range(self._num_servo)]
+    
     self._activate_sequence = activate_sequence
 
   def is_open(self):
@@ -124,6 +147,10 @@ class robot_servos(object):
         return False
 
     return True
+
+  def set_zero_position(self, angle_list):
+    for i in range(self._num_servo):
+      self.servo_list[i]._zero_pos = angle_list[i]
 
   def activate(self):
     for activate_list in self._activate_sequence:
@@ -147,12 +174,27 @@ class robot_servos(object):
         self.servo_list[i].torque(mode[i])
 
 
-  def move(self, position_list, move_time = 20):
-    for i in range(self._num_servo):
-      if position_list[i] == None:
+  def set_compliance_param(self, servo_index, CW_Margin, CCW_Margin, CW_Slope, CCW_Slope, Punch):
+    if isinstance(servo_index, int):
+      self.servo_list[servo_index].set_compliance_param(CW_Margin, CCW_Margin, CW_Slope, CCW_Slope, Punch)
+
+    if isinstance(servo_index, list):
+      for i in servo_index:
+        self.servo_list[i].set_compliance_param(CW_Margin, CCW_Margin, CW_Slope, CCW_Slope, Punch)
+
+  def move(self, position_list, move_time = 20, servo_index = [], reverse = []):
+    if servo_index == []:
+      servo_index = range(self._num_servo)
+    if reverse == []:
+      reverse = [False for i in range(self._num_servo)]
+
+    for i,j in enumerate(servo_index):
+      angle = position_list[i]
+      if angle is None:
         continue
-      else:
-        self.servo_list[i].move(position_list[i], move_time)
+      if reverse[i]:
+        angle *= -1
+      self.servo_list[j].move(angle, move_time)
 
   def get_status(self):
     _angle = []
@@ -176,3 +218,4 @@ class robot_servos(object):
             "Load": _load,
             "Temperature": _temperature,
             "Voltage": _voltage}
+
