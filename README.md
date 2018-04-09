@@ -2,16 +2,16 @@
 Using Futaba's servo motor from Python
 
 ## Installation
-
+Install python-serial, and add $USERNAME into dialout.
 ```
 sudo apt-get install python-serial
+sudo gpasswd -a $USERNAME dialout
 ```
 
 ## Setting Up 
 ### After booting up
 ```
 sudo ./startup.sh
-sudo chmod 777 /dev/ttyUSB0
 ```
 
 ### How To Use
