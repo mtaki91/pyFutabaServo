@@ -11,7 +11,11 @@ class serial_converter(serial.Serial):
     self.stopbits = serial.STOPBITS_ONE
     self.timeout = 1
     self.connect()
-    
+
+    # old pyserial has "readall" instead of "read_all"
+    if "readall" in dir(self):
+      self.read_all = self.readall
+      
   def connect(self):
     self.isBusy = False
     if self.isOpen == True:
@@ -54,11 +58,36 @@ class futaba_servo(object):
       Sum = Sum ^ tmp
       
     command.append(Sum)
-    
+    send_data = ""
     for tmp in command:
-      self._serial_conv.write(struct.pack('B', tmp))
-      sleep(0.001)
-   
+      send_data = send_data + struct.pack("B", tmp)
+
+#    print send_data
+    self._serial_conv.write(send_data)
+    sleep(0.005)
+    
+#    for tmp in command:
+#      self._serial_conv.write(struct.pack('B', tmp))
+#      sleep(0.001)
+
+  def fix_connection(self):
+    self._serial_conv.isBusy = True
+    while True:
+      self._send_command(0x01, 0x00, 0x00, 0x01)
+      sleep(0.015)
+      if self._serial_conv.inWaiting() > 1:
+        c = self._serial_conv.read_all()
+      elif self._serial_conv.inWaiting() == 1:
+        c = self._serial_conv.read()
+      else: # len(c) == 0:
+	print "retry to connect ",self._serial_conv.port, " ID: ", self._id
+        continue
+      if c[-1] == '\x07':
+        break
+      sleep(0.01)
+    self._serial_conv.isBusy = False
+      
+
   def set_compliance_param(self, CW_Margin, CCW_Margin, CW_Slope, CCW_Slope, Punch):
     data = [CW_Margin, CCW_Margin, CW_Slope, CCW_Slope, Punch & 0x00FF, (Punch & 0xFF00) >> 8]
 
@@ -71,7 +100,8 @@ class futaba_servo(object):
 
 
   def move(self, Position, Time):
-    Position = Position + self._zero_pos
+    Position = int(Position + self._zero_pos)
+    Time = int(Time)
     data = [Position & 0x00FF, (Position & 0xFF00) >> 8 , Time & 0x00FF, (Time & 0xFF00) >> 8 ]
 
     while self._serial_conv.isBusy:
@@ -97,20 +127,24 @@ class futaba_servo(object):
     self._serial_conv.isBusy = True
     self._send_command(0x00, 0x24, 0x01, 0x01, data)
     self._serial_conv.isBusy = False
-
+  
   def get_status(self):
     while self._serial_conv.isBusy:
       sleep(0.001)
 
     self._serial_conv.isBusy = True
+    
+    if self._serial_conv.inWaiting() > 0:
+      self._serial_conv.read_all()
+      
     self._send_command(0x09, 0x00, 0x00, 0x01)
-
     readbuf = []
     for x in range(26):
-      readbuf.append(self._serial_conv.read())
+      char = self._serial_conv.read()
+      readbuf.append(char)
 
     self._serial_conv.isBusy = False
-
+    
     _angle = struct.unpack('h', readbuf[7] + readbuf[8])[0]
     _time = struct.unpack('h', readbuf[9] + readbuf[10])[0]
     _speed = struct.unpack('h', readbuf[11] + readbuf[12])[0]
@@ -148,6 +182,11 @@ class servo_cluster(object):
 
     return True
 
+  def fix_connection(self):
+    for servo in self.servo_list:
+      servo.fix_connection()
+    sleep(0.01)
+    
   def set_zero_position(self, angle_list):
     for i in range(self._num_servo):
       self.servo_list[i]._zero_pos = angle_list[i]
@@ -163,8 +202,8 @@ class servo_cluster(object):
   def deactivate(self):
     self.torque(0)
 
-
   def torque(self, mode):
+    self.fix_connection()
     if isinstance(mode, int):
       for servo in self.servo_list:
         servo.torque(mode)
@@ -175,6 +214,7 @@ class servo_cluster(object):
 
 
   def set_compliance_param(self, servo_index, CW_Margin, CCW_Margin, CW_Slope, CCW_Slope, Punch):
+    self.fix_connection()
     if isinstance(servo_index, int):
       self.servo_list[servo_index].set_compliance_param(CW_Margin, CCW_Margin, CW_Slope, CCW_Slope, Punch)
 
@@ -183,6 +223,7 @@ class servo_cluster(object):
         self.servo_list[i].set_compliance_param(CW_Margin, CCW_Margin, CW_Slope, CCW_Slope, Punch)
 
   def move(self, position_list, move_time = 20, servo_index = [], reverse = []):
+    self.fix_connection()
     if servo_index == []:
       servo_index = range(self._num_servo)
     if reverse == []:
@@ -197,6 +238,7 @@ class servo_cluster(object):
       self.servo_list[j].move(angle, move_time)
 
   def get_status(self):
+    self.fix_connection()
     _angle = []
     _time = []
     _speed = []
