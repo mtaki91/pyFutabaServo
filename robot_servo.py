@@ -9,13 +9,10 @@ class serial_converter(serial.Serial):
     self.baudrate = Baudrate
     self.parity = serial.PARITY_NONE
     self.stopbits = serial.STOPBITS_ONE
-    self.timeout = 1
+    self.timeout = 0.1
     self.connect()
 
-    # old pyserial has "readall" instead of "read_all"
-    if "readall" in dir(self):
-      self.read_all = self.readall
-      
+    
   def connect(self):
     self.isBusy = False
     if self.isOpen == True:
@@ -29,6 +26,11 @@ class serial_converter(serial.Serial):
       except:
         return False
 
+      
+  def buffer_clear(self):
+    self.flushInput()
+
+    
 
 class futaba_servo(object):
   def __init__(self, serial_conv, servo_id, zero_position = 0):
@@ -62,31 +64,9 @@ class futaba_servo(object):
     for tmp in command:
       send_data = send_data + struct.pack("B", tmp)
 
-#    print send_data
     self._serial_conv.write(send_data)
-    sleep(0.005)
-    
-#    for tmp in command:
-#      self._serial_conv.write(struct.pack('B', tmp))
-#      sleep(0.001)
+#    sleep(0.005)
 
-  def fix_connection(self):
-    self._serial_conv.isBusy = True
-    while True:
-      self._send_command(0x01, 0x00, 0x00, 0x01)
-      sleep(0.015)
-      if self._serial_conv.inWaiting() > 1:
-        c = self._serial_conv.read_all()
-      elif self._serial_conv.inWaiting() == 1:
-        c = self._serial_conv.read()
-      else: # len(c) == 0:
-	print "retry to connect ",self._serial_conv.port, " ID: ", self._id
-        continue
-      if c[-1] == '\x07':
-        break
-      sleep(0.01)
-    self._serial_conv.isBusy = False
-      
 
   def set_compliance_param(self, CW_Margin, CCW_Margin, CW_Slope, CCW_Slope, Punch):
     data = [CW_Margin, CCW_Margin, CW_Slope, CCW_Slope, Punch & 0x00FF, (Punch & 0xFF00) >> 8]
@@ -95,22 +75,43 @@ class futaba_servo(object):
       sleep(0.001)
 
     self._serial_conv.isBusy = True
-    self._send_command(0x00, 0x18, 0x06, 0x01, data)
+    self._serial_conv.buffer_clear()
+    self._send_command(0x01, 0x18, 0x06, 0x01, data)
+    ret_packet = self._serial_conv.read()
     self._serial_conv.isBusy = False
+    
+    if ret_packet == '\x07':
+      return True
+      #print  self._serial_conv.port + " ID: " + str(self._id), "OK"
 
+    else:
+      print "retry to send command:", self._serial_conv.port, " ID: ", self._id
+      self.set_compliance_param(CW_Margin, CCW_Margin, CW_Slope, CCW_Slope, Punch)
+    
 
   def move(self, Position, Time):
-    Position = int(Position + self._zero_pos)
-    Time = int(Time)
-    data = [Position & 0x00FF, (Position & 0xFF00) >> 8 , Time & 0x00FF, (Time & 0xFF00) >> 8 ]
+    pos = int(Position + self._zero_pos)
+    tm = int(Time)
+    data = [pos & 0x00FF, (pos & 0xFF00) >> 8 , tm & 0x00FF, (tm & 0xFF00) >> 8 ]
 
     while self._serial_conv.isBusy:
       sleep(0.001)
 
     self._serial_conv.isBusy = True
-    self._send_command(0x00, 0x1E, 0x04, 0x01, data)
+    self._serial_conv.buffer_clear()
+    self._send_command(0x01, 0x1E, 0x04, 0x01, data)
+    ret_packet = self._serial_conv.read()
     self._serial_conv.isBusy = False
-  
+    
+    if ret_packet == '\x07':
+      return True
+      #print  self._serial_conv.port + " ID: " + str(self._id), "OK"
+
+    else:
+      print "retry to send command:", self._serial_conv.port, " ID: ", self._id
+      self.move(Position, Time)
+
+      
   def torque(self, Mode):
     """
     Set Servo's torque
@@ -120,13 +121,24 @@ class futaba_servo(object):
     """
 
     data = Mode & 0x00FF
-
     while self._serial_conv.isBusy:
       sleep(0.001)
 
     self._serial_conv.isBusy = True
-    self._send_command(0x00, 0x24, 0x01, 0x01, data)
+    self._serial_conv.buffer_clear()
+    self._send_command(0x01, 0x24, 0x01, 0x01, data)
+
+    ret_packet = self._serial_conv.read()
     self._serial_conv.isBusy = False
+    
+    if ret_packet == '\x07':
+      return True
+      #print  self._serial_conv.port + " ID: " + str(self._id), "OK"
+
+    else:
+      print "retry to send command:", self._serial_conv.port, " ID: ", self._id
+      self.torque(Mode)      
+
   
   def get_status(self):
     while self._serial_conv.isBusy:
@@ -134,30 +146,38 @@ class futaba_servo(object):
 
     self._serial_conv.isBusy = True
     
-    if self._serial_conv.inWaiting() > 0:
-      self._serial_conv.read_all()
-      
+    self._serial_conv.buffer_clear()
     self._send_command(0x09, 0x00, 0x00, 0x01)
-    readbuf = []
+    readbuf = ""
     for x in range(26):
       char = self._serial_conv.read()
-      readbuf.append(char)
+      if char == "":
+        readbuf = "timeout"
+        break
+      readbuf = readbuf + char
 
     self._serial_conv.isBusy = False
-    
-    _angle = struct.unpack('h', readbuf[7] + readbuf[8])[0]
-    _time = struct.unpack('h', readbuf[9] + readbuf[10])[0]
-    _speed = struct.unpack('h', readbuf[11] + readbuf[12])[0]
-    _load = struct.unpack('h', readbuf[13] + readbuf[14])[0]
-    _temperature = struct.unpack('h', readbuf[15] + readbuf[16])[0]
-    _voltage = struct.unpack('h', readbuf[17] + readbuf[18])[0]
 
-    return {"Angle": _angle - self._zero_pos,           
-            "Time": _time,
-            "Speed": _speed,
-            "Load": _load,
-            "Temperature": _temperature,
-            "Voltage": _voltage}
+    ##check header
+    if readbuf[0] == "\xFD" and readbuf[1] == "\xDF":
+      angle = struct.unpack('h', readbuf[7] + readbuf[8])[0]
+      time = struct.unpack('h', readbuf[9] + readbuf[10])[0]
+      speed = struct.unpack('h', readbuf[11] + readbuf[12])[0]
+      load = struct.unpack('h', readbuf[13] + readbuf[14])[0]
+      temperature = struct.unpack('h', readbuf[15] + readbuf[16])[0]
+      voltage = struct.unpack('h', readbuf[17] + readbuf[18])[0]
+
+      return {"Angle": angle - self._zero_pos,           
+              "Time": time,
+              "Speed": speed,
+              "Load": load,
+              "Temperature": temperature,
+              "Voltage": voltage}
+      
+    else:
+      print "retry to send command:", self._serial_conv.port, " ID: ", self._id
+      return self.get_status()
+
 
 
 class servo_cluster(object):
@@ -182,11 +202,6 @@ class servo_cluster(object):
 
     return True
 
-  def fix_connection(self):
-    for servo in self.servo_list:
-      servo.fix_connection()
-    sleep(0.01)
-    
   def set_zero_position(self, angle_list):
     for i in range(self._num_servo):
       self.servo_list[i]._zero_pos = angle_list[i]
@@ -203,7 +218,6 @@ class servo_cluster(object):
     self.torque(0)
 
   def torque(self, mode):
-    self.fix_connection()
     if isinstance(mode, int):
       for servo in self.servo_list:
         servo.torque(mode)
@@ -214,7 +228,6 @@ class servo_cluster(object):
 
 
   def set_compliance_param(self, servo_index, CW_Margin, CCW_Margin, CW_Slope, CCW_Slope, Punch):
-    self.fix_connection()
     if isinstance(servo_index, int):
       self.servo_list[servo_index].set_compliance_param(CW_Margin, CCW_Margin, CW_Slope, CCW_Slope, Punch)
 
@@ -223,7 +236,6 @@ class servo_cluster(object):
         self.servo_list[i].set_compliance_param(CW_Margin, CCW_Margin, CW_Slope, CCW_Slope, Punch)
 
   def move(self, position_list, move_time = 20, servo_index = [], reverse = []):
-    self.fix_connection()
     if servo_index == []:
       servo_index = range(self._num_servo)
     if reverse == []:
@@ -238,26 +250,25 @@ class servo_cluster(object):
       self.servo_list[j].move(angle, move_time)
 
   def get_status(self):
-    self.fix_connection()
-    _angle = []
-    _time = []
-    _speed = []
-    _load = []
-    _temperature = []
-    _voltage = []
+    angle = []
+    time = []
+    speed = []
+    load = []
+    temperature = []
+    voltage = []
     for servo in self.servo_list:
-      _data = servo.get_status()
-      _angle.append(_data["Angle"])
-      _time.append(_data["Time"])
-      _speed.append(_data["Speed"])
-      _load.append(_data["Load"])
-      _temperature.append(_data["Temperature"])
-      _voltage.append(_data["Voltage"])
+      data = servo.get_status()
+      angle.append(data["Angle"])
+      time.append(data["Time"])
+      speed.append(data["Speed"])
+      load.append(data["Load"])
+      temperature.append(data["Temperature"])
+      voltage.append(data["Voltage"])
 
-    return {"Angle": _angle,           
-            "Time": _time,
-            "Speed": _speed,
-            "Load": _load,
-            "Temperature": _temperature,
-            "Voltage": _voltage}
+    return {"Angle": angle,           
+            "Time": time,
+            "Speed": speed,
+            "Load": load,
+            "Temperature": temperature,
+            "Voltage": voltage}
 
